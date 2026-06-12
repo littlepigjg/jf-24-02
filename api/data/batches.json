@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "mq8wipfa7g7bzyc1",
+      "name": "??????-???",
+      "baseUrl": "https://intranet.example.com/device",
+      "paramName": "sn",
+      "totalCount": 5,
+      "successCount": 5,
+      "status": "done",
+      "qrcodeIds": [
+        "mq8wipj5w5nr4ckm",
+        "mq8wipjexuiv10gq",
+        "mq8wipjjc0wyh4ct",
+        "mq8wipjmkzl3hn4p",
+        "mq8wipjpx6ns8jdf"
+      ],
+      "createdAt": "2026-06-11T02:51:40.724Z"
+    },
+    {
+      "id": "mq8weofnaim7i7cb",
+      "name": "Powershell??-???",
+      "baseUrl": "https://intranet.example.com/desk",
+      "paramName": "id",
+      "totalCount": 6,
+      "successCount": 6,
+      "status": "done",
+      "qrcodeIds": [
+        "mq8weog1x8ki4ukm",
+        "mq8weog678hxoybt",
+        "mq8weogauhk15v71",
+        "mq8weogc8636adym",
+        "mq8weogezge9d7a8",
+        "mq8weoggqi4h03s6"
+      ],
+      "createdAt": "2026-06-11T02:48:32.817Z"
+    },
+    {
+      "id": "mq8w7yxrydjwnnh9",
+      "name": "??????A",
+      "baseUrl": "https://intranet.example.com/item",
+      "paramName": "sku",
+      "totalCount": 5,
+      "successCount": 5,
+      "status": "done",
+      "qrcodeIds": [
+        "mq8w7yy6pz7og1xp",
+        "mq8w7yyhnqmfvefn",
+        "mq8w7yylhsr8n6o8",
+        "mq8w7yyoc6iryjws",
+        "mq8w7yyqxe038065"
+      ],
+      "createdAt": "2026-06-11T02:43:19.837Z"
+    }
+  ]
+}
