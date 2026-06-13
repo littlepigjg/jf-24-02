@@ -1,5 +1,6 @@
 import { QrService } from './QrService.js'
 import { scanRecordRepository } from '../repositories/ScanRecordRepository.js'
+import { getQrCodeCache } from '../cache/index.js'
 import type { ScanRecord } from '../../shared/types.js'
 
 function generateId(): string {
@@ -17,7 +18,10 @@ function getClientIp(req: any): string {
 
 export const RedirectService = {
   async resolve(shortCode: string, req: any): Promise<{ targetUrl: string } | null> {
-    const qr = await QrService.getByShortCode(shortCode)
+    const cache = getQrCodeCache()
+    const qr = await cache.getByShortCode(shortCode, () =>
+      QrService.getByShortCode(shortCode),
+    )
     if (!qr || !qr.enabled) {
       return null
     }

@@ -110,3 +110,49 @@ export interface ApiResponse<T> {
   error?: string
   message?: string
 }
+
+export interface CacheLayerStats {
+  size: number
+  hits: number
+  misses: number
+  hitRate: number
+}
+
+export interface CacheStats {
+  l1: CacheLayerStats
+  l2: {
+    available: boolean
+    hits: number | null
+    misses: number | null
+    hitRate: number | null
+    size: number | null
+  }
+  degraded: boolean
+  namespace: string
+}
+
+export interface CacheMetricSnapshot {
+  timestamp: number
+  l1Hits: number
+  l1Misses: number
+  l1HitRate: number
+  l1Size: number
+  l2Hits: number | null
+  l2Misses: number | null
+  l2HitRate: number | null
+  l2Size: number | null
+  l2Available: boolean
+  degraded: boolean
+  totalRequests: number
+  overallHitRate: number
+}
+
+export interface CacheCumulativeStats {
+  l1Hits: number
+  l1Misses: number
+  l2Hits: number
+  l2Misses: number
+  fallbacks: number
+  totalRequests: number
+  overallHitRate: number
+}

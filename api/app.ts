@@ -12,7 +12,10 @@ import qrcodesRoutes from './routes/qrcodes.js'
 import statsRoutes from './routes/stats.js'
 import batchRoutes from './routes/batch.js'
 import exportRoutes from './routes/export.js'
+import cacheRoutes from './routes/cache.js'
 import { RedirectService } from './services/RedirectService.js'
+import { getQrCodeCache } from './cache/index.js'
+import { qrCodeRepository } from './repositories/QrCodeRepository.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -43,13 +46,20 @@ app.use('/api/qrcodes', qrcodesRoutes)
 app.use('/api/stats', statsRoutes)
 app.use('/api/batch', batchRoutes)
 app.use('/api/export', exportRoutes)
+app.use('/api/cache', cacheRoutes)
 
 app.use(
   '/api/health',
   (req: Request, res: Response, next: NextFunction): void => {
+    const cache = getQrCodeCache()
     res.status(200).json({
       success: true,
       message: 'ok',
+      cache: {
+        warmedUp: cache.isWarmedUp,
+        degraded: cache.getStats().degraded,
+        l2Available: cache.getStats().l2.available,
+      },
     })
   },
 )
@@ -68,5 +78,12 @@ app.use((req: Request, res: Response) => {
     error: 'API not found',
   })
 })
+
+export async function initializeCache(): Promise<void> {
+  const cache = getQrCodeCache({
+    useRedis: process.env.REDIS_URL !== undefined,
+  })
+  await cache.initialize(() => qrCodeRepository.getAll())
+}
 
 export default app

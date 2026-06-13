@@ -1,34 +1,39 @@
-/**
- * local server entry file, for local development
- */
-import app from './app.js';
+import app, { initializeCache } from './app.js'
+import { destroyQrCodeCache } from './cache/index.js'
 
-/**
- * start server with port
- */
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3001
 
-const server = app.listen(PORT, () => {
-  console.log(`Server ready on port ${PORT}`);
-});
+async function start(): Promise<void> {
+  await initializeCache()
 
-/**
- * close server
- */
-process.on('SIGTERM', () => {
-  console.log('SIGTERM signal received');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
-});
+  const server = app.listen(PORT, () => {
+    console.log(`Server ready on port ${PORT}`)
+  })
 
-process.on('SIGINT', () => {
-  console.log('SIGINT signal received');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
-});
+  process.on('SIGTERM', () => {
+    console.log('SIGTERM signal received')
+    destroyQrCodeCache().finally(() => {
+      server.close(() => {
+        console.log('Server closed')
+        process.exit(0)
+      })
+    })
+  })
 
-export default app;
+  process.on('SIGINT', () => {
+    console.log('SIGINT signal received')
+    destroyQrCodeCache().finally(() => {
+      server.close(() => {
+        console.log('Server closed')
+        process.exit(0)
+      })
+    })
+  })
+}
+
+start().catch((err) => {
+  console.error('Failed to start server:', err)
+  process.exit(1)
+})
+
+export default app

@@ -1,6 +1,7 @@
 import QRCode from 'qrcode'
 import { qrCodeRepository } from '../repositories/QrCodeRepository.js'
 import { scanRecordRepository } from '../repositories/ScanRecordRepository.js'
+import { getQrCodeCache } from '../cache/index.js'
 import type {
   QrCode,
   CreateQrCodeRequest,
@@ -22,16 +23,30 @@ export const QrService = {
     pageSize: number = 20,
     keyword?: string,
   ): Promise<PagedResult<QrCode>> {
-    let items = await qrCodeRepository.getAll()
-    if (keyword) {
-      const kw = keyword.toLowerCase()
-      items = items.filter(
-        (q) =>
-          q.name.toLowerCase().includes(kw) ||
-          q.targetUrl.toLowerCase().includes(kw) ||
-          q.shortCode.toLowerCase().includes(kw),
-      )
+    const cache = getQrCodeCache()
+
+    if (!keyword) {
+      const cacheKey = `page:${page}:size:${pageSize}`
+      const cached = await cache.getList(cacheKey, async () => {
+        const items = await qrCodeRepository.getAll()
+        const total = items.length
+        const start = (page - 1) * pageSize
+        const paged = items.slice(start, start + pageSize)
+        return paged
+      })
+      const allItems = await cache.getAll(() => qrCodeRepository.getAll())
+      const total = allItems.length
+      return { items: cached, total, page, pageSize }
     }
+
+    let items = await qrCodeRepository.getAll()
+    const kw = keyword.toLowerCase()
+    items = items.filter(
+      (q) =>
+        q.name.toLowerCase().includes(kw) ||
+        q.targetUrl.toLowerCase().includes(kw) ||
+        q.shortCode.toLowerCase().includes(kw),
+    )
     const total = items.length
     const start = (page - 1) * pageSize
     const paged = items.slice(start, start + pageSize)
@@ -39,11 +54,15 @@ export const QrService = {
   },
 
   async getById(id: string): Promise<QrCode | undefined> {
-    return qrCodeRepository.getById(id)
+    const cache = getQrCodeCache()
+    return cache.getById(id, () => qrCodeRepository.getById(id))
   },
 
   async getByShortCode(shortCode: string): Promise<QrCode | undefined> {
-    return qrCodeRepository.findOne((q) => q.shortCode === shortCode)
+    const cache = getQrCodeCache()
+    return cache.getByShortCode(shortCode, () =>
+      qrCodeRepository.findOne((q) => q.shortCode === shortCode),
+    )
   },
 
   async create(req: CreateQrCodeRequest): Promise<QrCode> {
@@ -76,7 +95,9 @@ export const QrService = {
       createdAt: now,
       updatedAt: now,
     }
-    return qrCodeRepository.create(qr)
+    const created = await qrCodeRepository.create(qr)
+    await getQrCodeCache().onCreated(created)
+    return created
   },
 
   async update(id: string, req: UpdateQrCodeRequest): Promise<QrCode | undefined> {
@@ -92,19 +113,32 @@ export const QrService = {
     if (req.errorLevel !== undefined) updates.errorLevel = req.errorLevel
     if (req.logoDataUrl !== undefined) updates.logoDataUrl = req.logoDataUrl
 
-    return qrCodeRepository.update(id, updates)
+    const updated = await qrCodeRepository.update(id, updates)
+    if (updated) {
+      await getQrCodeCache().onUpdated(updated)
+    }
+    return updated
   },
 
   async setEnabled(id: string, enabled: boolean): Promise<QrCode | undefined> {
-    return qrCodeRepository.update(id, {
+    const updated = await qrCodeRepository.update(id, {
       enabled,
       updatedAt: new Date().toISOString(),
     })
+    if (updated) {
+      await getQrCodeCache().onEnabledChanged(id, updated)
+    }
+    return updated
   },
 
   async delete(id: string): Promise<boolean> {
-    await scanRecordRepository.deleteMany((s) => s.qrcodeId === id)
-    return qrCodeRepository.delete(id)
+    const qr = await qrCodeRepository.getById(id)
+    const ok = await qrCodeRepository.delete(id)
+    if (ok && qr) {
+      await scanRecordRepository.deleteMany((s) => s.qrcodeId === id)
+      await getQrCodeCache().onDeleted(id, qr.shortCode)
+    }
+    return ok
   },
 
   async generatePngBuffer(qr: QrCode): Promise<Buffer> {
@@ -137,6 +171,7 @@ export const QrService = {
     const qr = await qrCodeRepository.getById(id)
     if (qr) {
       await qrCodeRepository.update(id, { scanCount: qr.scanCount + 1 })
+      await getQrCodeCache().onScanCountUpdated(id)
     }
   },
 }
