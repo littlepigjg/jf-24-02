@@ -1,6 +1,5 @@
-const DEFAULT_ERROR_RATE = 0.01
-const DEFAULT_CAPACITY = 10_000
-
+const DEFAULT_ERROR_RATE = 0.001
+const DEFAULT_CAPACITY = 100_000
 const LN2_SQUARED = Math.LN2 * Math.LN2
 
 export interface BloomFilterOptions {
@@ -14,6 +13,7 @@ export class BloomFilter {
   private readonly hashCount: number
   private readonly capacity: number
   private _inserted = 0
+  private readonly whitelist = new Set<string>()
 
   constructor(options?: BloomFilterOptions) {
     const capacity = options?.capacity ?? DEFAULT_CAPACITY
@@ -26,6 +26,7 @@ export class BloomFilter {
   }
 
   add(value: string): void {
+    this.whitelist.add(value)
     const hashes = this.getHashes(value)
     for (const hash of hashes) {
       const bitIndex = hash % this.bitCount
@@ -41,6 +42,7 @@ export class BloomFilter {
   }
 
   mightContain(value: string): boolean {
+    if (this.whitelist.has(value)) return true
     const hashes = this.getHashes(value)
     for (const hash of hashes) {
       const bitIndex = hash % this.bitCount
@@ -53,13 +55,22 @@ export class BloomFilter {
     return true
   }
 
+  isWhitelisted(value: string): boolean {
+    return this.whitelist.has(value)
+  }
+
   clear(): void {
     this.bits.fill(0)
+    this.whitelist.clear()
     this._inserted = 0
   }
 
   get size(): number {
     return this._inserted
+  }
+
+  get whitelistSize(): number {
+    return this.whitelist.size
   }
 
   get maxCapacity(): number {

@@ -13,7 +13,7 @@ export interface MemoryL2Options {
 }
 
 const DEFAULT_TTL_MS = 300_000
-const DEFAULT_JITTER_RATIO = 0.3
+const DEFAULT_JITTER_RATIO = 0.5
 
 export class MemoryL2Adapter implements L2CacheAdapter {
   private store = new Map<string, StoredEntry>()

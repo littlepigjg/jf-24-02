@@ -21,7 +21,7 @@ export interface L1CacheOptions {
 
 const DEFAULT_MAX_SIZE = 500
 const DEFAULT_TTL_MS = 30_000
-const DEFAULT_JITTER_RATIO = 0.3
+const DEFAULT_JITTER_RATIO = 0.5
 
 export class L1LocalCache {
   private map = new Map<string, LRUNode<unknown>>()

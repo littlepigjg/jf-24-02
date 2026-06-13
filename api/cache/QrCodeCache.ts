@@ -122,10 +122,14 @@ export class QrCodeCache {
     this.manager.addToBloomFilter(idKey)
     this.manager.addToBloomFilter(shortKey)
 
+    await this.manager.warmUp([
+      { key: idKey, value: qr },
+      { key: shortKey, value: qr },
+    ])
+
     await Promise.all([
       this.manager.invalidate(QR_CACHE_KEYS.all()),
-      this.manager.invalidate(idKey),
-      this.manager.invalidate(shortKey),
+      this.manager.invalidateByPrefix('qr:list:'),
     ])
   }
 
