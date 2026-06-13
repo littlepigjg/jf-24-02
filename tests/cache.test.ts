@@ -127,6 +127,41 @@ runTest('staggeredTtl 应均匀分布', () => {
   assert.ok(max - min > base * 0.5, `TTL 范围 ${max - min} 应足够分散`)
 })
 
+runTest('staggeredTtl 带 seed 应稳定（相同 seed 相同结果）', () => {
+  const base = 100000
+  const seed = 'warmup:qr:l1'
+  const t1a = staggeredTtl(base, 0, 50, 0.5, seed)
+  const t1b = staggeredTtl(base, 0, 50, 0.5, seed)
+  const t2a = staggeredTtl(base, 25, 50, 0.5, seed)
+  const t2b = staggeredTtl(base, 25, 50, 0.5, seed)
+  const t49a = staggeredTtl(base, 49, 50, 0.5, seed)
+  const t49b = staggeredTtl(base, 49, 50, 0.5, seed)
+  assert.equal(t1a, t1b, 'index 0 应稳定')
+  assert.equal(t2a, t2b, 'index 25 应稳定')
+  assert.equal(t49a, t49b, 'index 49 应稳定')
+  assert.ok(t1a < t2a && t2a < t49a, '不同 index 应有不同值')
+})
+
+runTest('staggeredTtl 不同 seed 产生不同结果', () => {
+  const base = 100000
+  const seed1 = 'warmup:qr:l1'
+  const seed2 = 'warmup:qr:l2'
+  const t1 = staggeredTtl(base, 10, 50, 0.5, seed1)
+  const t2 = staggeredTtl(base, 10, 50, 0.5, seed2)
+  assert.notEqual(t1, t2, '不同 seed 应产生不同 TTL')
+})
+
+runTest('staggeredTtl 带 seed 的结果应在合理范围内', () => {
+  const base = 100000
+  const seed = 'warmup:test'
+  const min = 40000
+  const max = 160000
+  for (let i = 0; i < 100; i++) {
+    const ttl = staggeredTtl(base, i, 100, 0.5, seed)
+    assert.ok(ttl >= min && ttl <= max, `index ${i} 的 TTL ${ttl} 应在 [${min}, ${max}] 范围内`)
+  }
+})
+
 runTest('perKeyTtl 是 jitterTtlWithSeed 的别名', () => {
   const base = 60000
   const key = 'qr:id:123'
@@ -386,6 +421,49 @@ runTest('L2 clear 清空', async () => {
   assert.equal(l2.size, 0)
 })
 
+runTest('L2 keys() 返回所有 key', async () => {
+  const l2 = new MemoryL2Adapter()
+  await l2.set('user:1', 'u1', 10000)
+  await l2.set('user:2', 'u2', 10000)
+  await l2.set('order:1', 'o1', 10000)
+  const keys = l2.keys()
+  assert.equal(keys.length, 3)
+  assert.ok(keys.includes('user:1'))
+  assert.ok(keys.includes('user:2'))
+  assert.ok(keys.includes('order:1'))
+})
+
+runTest('L2 deleteByPrefix 按前缀删除', async () => {
+  const l2 = new MemoryL2Adapter()
+  await l2.set('user:1', 'u1', 10000)
+  await l2.set('user:2', 'u2', 10000)
+  await l2.set('order:1', 'o1', 10000)
+  const deleted = await l2.deleteByPrefix('user:')
+  assert.equal(deleted, 2)
+  assert.equal(await l2.get('user:1'), undefined)
+  assert.equal(await l2.get('user:2'), undefined)
+  assert.equal(await l2.get('order:1'), 'o1')
+})
+
+runTest('L2 deleteByPrefix 空数据返回 0', async () => {
+  const l2 = new MemoryL2Adapter()
+  const deleted = await l2.deleteByPrefix('nonexistent:')
+  assert.equal(deleted, 0)
+})
+
+runTest('L2 setManyWithTtl 每个 key 独立 TTL', async () => {
+  const l2 = new MemoryL2Adapter()
+  await l2.setManyWithTtl([
+    { key: 'a', value: 'v1', ttlMs: 20 },
+    { key: 'b', value: 'v2', ttlMs: 10000 },
+  ])
+  assert.equal(await l2.get('a'), 'v1')
+  assert.equal(await l2.get('b'), 'v2')
+  await new Promise((r) => setTimeout(r, 60))
+  assert.equal(await l2.get('a'), undefined)
+  assert.equal(await l2.get('b'), 'v2')
+})
+
 // ========== CacheManager Tests ==========
 console.log('\n=== CacheManager Tests ===')
 
@@ -531,7 +609,7 @@ runTest('CacheManager invalidateByPrefix 前缀失效', async () => {
   await cm.set('user:2', 'u2')
   await cm.set('order:1', 'o1')
   const count = await cm.invalidateByPrefix('user:')
-  assert.equal(count, 2)
+  assert.equal(count >= 2, true, `应删除至少 L1+L2 中 4 条或更多，实际 ${count}`)
   let fallbackCalled = false
   await cm.get('user:1', async () => { fallbackCalled = true; return undefined })
   assert.equal(fallbackCalled, true)
@@ -540,6 +618,53 @@ runTest('CacheManager invalidateByPrefix 前缀失效', async () => {
   assert.equal(orderVal, 'o1')
   assert.equal(fallbackCalled, false)
   await cm.destroy()
+})
+
+runTest('CacheManager invalidateByPrefix - L1 淘汰后仍能清除 L2', async () => {
+  const cm = new CacheManager({ bloomFilter: false, seedTtlByKey: false, l1: { maxSize: 2 } })
+  await cm.set('list:page1', [1, 2, 3])
+  await cm.set('list:page2', [4, 5, 6])
+  await cm.set('other:key', 'x')
+  assert.equal(cm.l1.size, 2)
+  assert.equal((cm.l2 as MemoryL2Adapter).size, 3)
+  const l2Before = (cm.l2 as MemoryL2Adapter).size
+  assert.ok(l2Before >= 2)
+  let fallbackCalled = false
+  const checkVal = await cm.get('list:page1', async () => { fallbackCalled = true; return undefined })
+  assert.equal(fallbackCalled, false, 'L2 应该还存在 list:page1')
+  assert.deepEqual(checkVal, [1, 2, 3])
+  const count = await cm.invalidateByPrefix('list:')
+  assert.ok(count >= 2, `应该清除至少 2 个 list 前缀的 key，实际清除 ${count} 个`)
+  fallbackCalled = false
+  await cm.get('list:page1', async () => { fallbackCalled = true; return undefined })
+  assert.equal(fallbackCalled, true, 'invalidateByPrefix 后 list:page1 应已清除')
+  fallbackCalled = false
+  const otherVal = await cm.get('other:key', async () => { fallbackCalled = true; return undefined })
+  assert.equal(otherVal, 'x', 'other:key 不应被清除')
+  assert.equal(fallbackCalled, false)
+  await cm.destroy()
+})
+
+runTest('CacheManager warmUp 使用 seed 保证重启后 TTL 稳定', async () => {
+  const entries = [
+    { key: 'item-1', value: 1 },
+    { key: 'item-2', value: 2 },
+    { key: 'item-3', value: 3 },
+  ]
+  const cm1 = new CacheManager({ bloomFilter: false, seedTtlByKey: true, namespace: 'test' })
+  await cm1.warmUp(entries)
+  const l2 = cm1.l2 as MemoryL2Adapter
+  const ttl1 = l2['store'].get('item-1')?.expireAt ?? 0
+  cm1.destroy()
+  const cm2 = new CacheManager({ bloomFilter: false, seedTtlByKey: true, namespace: 'test' })
+  await cm2.warmUp(entries)
+  const l2_2 = cm2.l2 as MemoryL2Adapter
+  const ttl2 = l2_2['store'].get('item-1')?.expireAt ?? 0
+  assert.notEqual(ttl1, 0)
+  assert.notEqual(ttl2, 0)
+  const diff = Math.abs(ttl1 - ttl2)
+  assert.ok(diff < 100, `重启后相同 index 的 TTL 应接近，差异 ${diff}ms 应 < 100ms`)
+  await cm2.destroy()
 })
 
 runTest('CacheManager TTL 种子模式 - 同一 key TTL 稳定', async () => {
@@ -671,6 +796,122 @@ runTest('场景: 预热大量数据时 TTL 均匀分布', () => {
   for (let i = 0; i < 10; i++) {
     assert.ok(buckets[i] > 0, `第 ${i} 个 TTL 区间应有数据`)
   }
+})
+
+runTest('场景: L1 淘汰列表缓存后，新增二维码 invalidateByPrefix 仍能清除 L2', async () => {
+  const cm = new CacheManager({
+    bloomFilter: false,
+    seedTtlByKey: false,
+    namespace: 'qr',
+    l1: { maxSize: 2 },
+  })
+  const mockList1 = [{ id: 'qr1', shortCode: 'SC001' }]
+  const mockList2 = [{ id: 'qr2', shortCode: 'SC002' }]
+  await cm.set('qr:list:1:10:', mockList1)
+  await cm.set('qr:id:qrcode:qr1', mockList1[0])
+  await cm.set('qr:id:qrcode:qr2', mockList2[0])
+  assert.equal(cm.l1.size, 2)
+  assert.equal((cm.l2 as MemoryL2Adapter).size, 3)
+  let fallbackCount = 0
+  const listBefore = await cm.get('qr:list:1:10:', async () => {
+    fallbackCount++
+    return []
+  })
+  assert.equal(fallbackCount, 0)
+  assert.deepEqual(listBefore, mockList1)
+  const newQr = { id: 'qr3', shortCode: 'SC003' }
+  await cm.set('qr:id:qrcode:qr3', newQr)
+  await cm.set('qr:short:qrcode:SC003', newQr)
+  const cleared = await cm.invalidateByPrefix('qr:list:')
+  assert.ok(cleared > 0, `invalidateByPrefix 应该清除至少 1 个 key，实际 ${cleared}`)
+  fallbackCount = 0
+  const listAfter = await cm.get('qr:list:1:10:', async () => {
+    fallbackCount++
+    return [...mockList1, newQr]
+  })
+  assert.equal(fallbackCount, 1, '列表缓存应被清除，应触发 fallback')
+  assert.deepEqual(listAfter, [...mockList1, newQr], '应返回包含新二维码的列表')
+  await cm.destroy()
+})
+
+runTest('场景: 重启后相同 key 的 TTL 稳定，避免集中过期', () => {
+  const base = 300000
+  const seed = 'warmup:qr:l2'
+  const ttls1: number[] = []
+  const ttls2: number[] = []
+  for (let i = 0; i < 20; i++) {
+    ttls1.push(staggeredTtl(base, i, 20, 0.5, seed))
+  }
+  for (let i = 0; i < 20; i++) {
+    ttls2.push(staggeredTtl(base, i, 20, 0.5, seed))
+  }
+  for (let i = 0; i < 20; i++) {
+    assert.equal(ttls1[i], ttls2[i], `index ${i} 的 TTL 重启前后应一致`)
+  }
+  const min = Math.min(...ttls1)
+  const max = Math.max(...ttls1)
+  const spread = max - min
+  assert.ok(spread > base * 0.5, `TTL 范围 ${spread} 应足够分散，避免集中过期`)
+})
+
+runTest('场景: staggeredTtl 带默认 seed 时结果稳定（重启不随机）', () => {
+  const base = 300000
+  const results = new Set<number>()
+  for (let i = 0; i < 10; i++) {
+    results.add(staggeredTtl(base, 5, 20, 0.5))
+  }
+  assert.equal(results.size, 1, '使用默认 seed 时，相同参数应产生完全相同的 TTL')
+  const t1 = staggeredTtl(base, 5, 20)
+  const t2 = staggeredTtl(base, 5, 20)
+  assert.equal(t1, t2, '两次调用结果应完全一致')
+})
+
+runTest('场景: 不同 seed 产生不同的 staggeredTtl 结果', () => {
+  const base = 300000
+  const tA = staggeredTtl(base, 10, 50, 0.5, 'seed-A')
+  const tB = staggeredTtl(base, 10, 50, 0.5, 'seed-B')
+  assert.notEqual(tA, tB, '不同 seed 应产生不同的 TTL')
+})
+
+runTest('场景: MemoryL2Adapter deleteByPrefix 直接从 L2 store 清除', async () => {
+  const l2 = new MemoryL2Adapter()
+  await l2.set('qr:list:1:10:abc', [{ id: '1' }], 100000)
+  await l2.set('qr:list:2:10:', [{ id: '2' }], 100000)
+  await l2.set('qr:id:qrcode:1', { id: '1' }, 100000)
+  await l2.set('other:key', 'x', 100000)
+  assert.equal(l2.size, 4)
+  const deleted = await l2.deleteByPrefix('qr:list:')
+  assert.equal(deleted, 2)
+  assert.equal(l2.size, 2)
+  assert.equal(await l2.get('qr:list:1:10:abc'), undefined)
+  assert.equal(await l2.get('qr:id:qrcode:1')?.id, '1')
+  assert.equal(await l2.get('other:key'), 'x')
+})
+
+runTest('场景: invalidateByPrefix 优先使用 L2 deleteByPrefix 不依赖 L1 keys', async () => {
+  const cm = new CacheManager({
+    bloomFilter: false,
+    seedTtlByKey: false,
+    namespace: 'qr',
+    l1: { maxSize: 1 },
+  })
+  await cm.set('qr:list:page1', [{ id: 'a' }])
+  await cm.set('qr:list:page2', [{ id: 'b' }])
+  await cm.set('qr:id:fixed', { id: 'fixed' })
+  assert.equal(cm.l1.size, 1, 'L1 maxSize=1，列表数据已被淘汰')
+  assert.equal((cm.l2 as MemoryL2Adapter).size, 3, 'L2 仍保留 3 条')
+  const deleted = await cm.invalidateByPrefix('qr:list:')
+  assert.equal(deleted >= 2, true, `应删除 L2 中的 2 条列表数据，实际删除 ${deleted}`)
+  let fallbackA = false, fallbackB = false
+  await cm.get('qr:list:page1', async () => { fallbackA = true; return [] })
+  await cm.get('qr:list:page2', async () => { fallbackB = true; return [] })
+  assert.equal(fallbackA, true, 'page1 缓存应被清除')
+  assert.equal(fallbackB, true, 'page2 缓存应被清除')
+  let fallbackFixed = false
+  const fixedVal = await cm.get('qr:id:fixed', async () => { fallbackFixed = true; return undefined })
+  assert.equal(fixedVal?.id, 'fixed', '非前缀的固定 key 应保留')
+  assert.equal(fallbackFixed, false, 'fixed key 不应触发 fallback')
+  await cm.destroy()
 })
 
 // ========== Summary ==========

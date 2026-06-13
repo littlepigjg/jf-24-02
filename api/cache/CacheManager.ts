@@ -300,31 +300,57 @@ export class CacheManager {
   }
 
   async invalidateByPrefix(prefix: string): Promise<number> {
-    let count = 0
-    const keysToDelete: string[] = []
+    let totalDeleted = 0
+    const l1KeysToDelete: string[] = []
+
     for (const key of this.l1.keys()) {
       if (key.startsWith(prefix)) {
-        keysToDelete.push(key)
-        this.l1.delete(key)
-        count++
+        l1KeysToDelete.push(key)
       }
     }
-    if (this._l2Available && keysToDelete.length > 0 && this.l2.deleteMany) {
+    for (const key of l1KeysToDelete) {
+      this.l1.delete(key)
+      totalDeleted++
+    }
+
+    if (this._l2Available && this.l2.deleteByPrefix) {
       try {
-        await this.l2.deleteMany(keysToDelete)
+        const l2Deleted = await this.l2.deleteByPrefix(prefix)
+        totalDeleted += l2Deleted
       } catch {
         this._l2Available = false
       }
-    } else if (this._l2Available && keysToDelete.length > 0) {
-      for (const k of keysToDelete) {
-        try {
-          await this.l2.delete(k)
-        } catch {
-          this._l2Available = false
+    } else if (this._l2Available && this.l2.keys) {
+      const l2KeysToDelete: string[] = []
+      for (const key of this.l2.keys()) {
+        if (key.startsWith(prefix)) {
+          l2KeysToDelete.push(key)
+        }
+      }
+      if (l2KeysToDelete.length > 0) {
+        if (this.l2.deleteMany) {
+          try {
+            const l2Deleted = await this.l2.deleteMany(l2KeysToDelete)
+            totalDeleted += l2Deleted
+          } catch {
+            this._l2Available = false
+          }
+        } else {
+          let l2Deleted = 0
+          for (const k of l2KeysToDelete) {
+            try {
+              if (await this.l2.delete(k)) l2Deleted++
+            } catch {
+              this._l2Available = false
+              break
+            }
+          }
+          totalDeleted += l2Deleted
         }
       }
     }
-    return count
+
+    return totalDeleted
   }
 
   async warmUp<T>(entries: Array<{ key: string; value: T }>, ttlOverride?: { l1?: number; l2?: number }): Promise<void> {
@@ -334,7 +360,7 @@ export class CacheManager {
 
     for (let i = 0; i < total; i++) {
       const entry = entries[i]
-      const staggeredL1 = staggeredTtl(baseL1Ttl, i, total, DEFAULT_TTL_JITTER)
+      const staggeredL1 = staggeredTtl(baseL1Ttl, i, total, DEFAULT_TTL_JITTER, `${this.namespace}:warmup:l1`)
       this.l1.set(entry.key, entry.value, staggeredL1)
 
       if (this.bloomFilter) {
@@ -347,7 +373,7 @@ export class CacheManager {
         const l2Entries: Array<{ key: string; value: T; ttlMs: number }> = entries.map((e, i) => ({
           key: e.key,
           value: e.value,
-          ttlMs: staggeredTtl(baseL2Ttl, i, total, DEFAULT_TTL_JITTER),
+          ttlMs: staggeredTtl(baseL2Ttl, i, total, DEFAULT_TTL_JITTER, `${this.namespace}:warmup:l2`),
         }))
         if ('setManyWithTtl' in this.l2 && typeof (this.l2 as any).setManyWithTtl === 'function') {
           await (this.l2 as any).setManyWithTtl(l2Entries)
@@ -370,7 +396,7 @@ export class CacheManager {
     } else if (!this._degraded && this._l2Available) {
       for (let i = 0; i < total; i++) {
         const entry = entries[i]
-        const staggeredL2 = staggeredTtl(baseL2Ttl, i, total, DEFAULT_TTL_JITTER)
+        const staggeredL2 = staggeredTtl(baseL2Ttl, i, total, DEFAULT_TTL_JITTER, `${this.namespace}:warmup:l2`)
         try {
           await this.l2.set(entry.key, entry.value, staggeredL2)
         } catch {

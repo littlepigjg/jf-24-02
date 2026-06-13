@@ -223,6 +223,45 @@ export class RedisL2Adapter implements L2CacheAdapter {
     }
   }
 
+  async deleteByPrefix(prefix: string): Promise<number> {
+    try {
+      await this.ensureConnection()
+      const pattern = this.prefixKey(`${prefix}*`)
+      const keys: string[] = []
+      let cursor = '0'
+      do {
+        const reply = await this.client.scan(cursor, 'MATCH', pattern, 'COUNT', 100)
+        cursor = reply[0]
+        keys.push(...reply[1])
+      } while (cursor !== '0')
+      if (keys.length === 0) return 0
+      return await this.client.del(...keys)
+    } catch {
+      this.connected = false
+      return 0
+    }
+  }
+
+  async setManyWithTtl<T>(entries: Array<{ key: string; value: T; ttlMs: number }>): Promise<void> {
+    if (entries.length === 0) return
+    try {
+      await this.ensureConnection()
+      const pipeline = this.client.multi ? this.client.multi() : this.client.pipeline()
+      for (const entry of entries) {
+        const jitteredTtl = jitterTtl(entry.ttlMs, this.jitterRatio)
+        const ttlSec = Math.max(1, Math.ceil(jitteredTtl / 1000))
+        pipeline.set(this.prefixKey(entry.key), JSON.stringify(entry.value), { EX: ttlSec })
+      }
+      await pipeline.exec()
+    } catch {
+      this.connected = false
+    }
+  }
+
+  keys(): string[] {
+    return []
+  }
+
   async ping(): Promise<boolean> {
     try {
       await this.ensureConnection()

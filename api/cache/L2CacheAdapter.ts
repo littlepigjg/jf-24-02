@@ -3,8 +3,11 @@ export interface L2CacheAdapter {
   set<T>(key: string, value: T, ttlMs: number): Promise<void>
   delete(key: string): Promise<boolean>
   clear(): Promise<void>
+  keys?(): string[]
   getMany?<T>(keys: string[]): Promise<Map<string, T>>
   setMany?<T>(entries: Array<{ key: string; value: T }>, ttlMs: number): Promise<void>
+  setManyWithTtl?<T>(entries: Array<{ key: string; value: T; ttlMs: number }>): Promise<void>
   deleteMany?(keys: string[]): Promise<number>
+  deleteByPrefix?(prefix: string): Promise<number>
   ping?(): Promise<boolean>
 }

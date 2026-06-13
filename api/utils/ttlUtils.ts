@@ -24,13 +24,26 @@ export function jitterTtlWithSeed(baseTtlMs: number, seed: string, jitterRatio: 
   return Math.max(1, Math.round(baseTtlMs + jitter))
 }
 
-export function staggeredTtl(baseTtlMs: number, index: number, total: number, jitterRatio: number = 0.5): number {
+export function staggeredTtl(
+  baseTtlMs: number,
+  index: number,
+  total: number,
+  jitterRatio: number = 0.5,
+  seed: string = 'default',
+): number {
   const safeRatio = Math.min(MAX_JITTER_RATIO, Math.max(MIN_JITTER_RATIO, jitterRatio))
-  if (total <= 1) return jitterTtl(baseTtlMs, safeRatio)
+  if (total <= 1) {
+    return jitterTtlWithSeed(baseTtlMs, `${seed}:${index}`, safeRatio)
+  }
   const spread = baseTtlMs * safeRatio * 2
   const offset = spread * (index / (total - 1) - 0.5)
   const base = baseTtlMs + offset
-  const extraJitter = baseTtlMs * 0.1 * (Math.random() * 2 - 1)
+
+  const seedStr = `${seed}:staggered:${index}:${total}:${baseTtlMs}`
+  const hash = stringHash(seedStr)
+  const random = (hash % 10000) / 10000
+  const extraJitter = baseTtlMs * 0.1 * (random * 2 - 1)
+
   return Math.max(1, Math.round(base + extraJitter))
 }
 
@@ -43,7 +56,9 @@ export function perLayerTtl(
   layerMultipliers: number[],
   jitterRatio: number = DEFAULT_JITTER_RATIO,
 ): number[] {
-  return layerMultipliers.map((m) => jitterTtl(baseTtlMs * m, jitterRatio))
+  return layerMultipliers.map((m, idx) =>
+    jitterTtlWithSeed(baseTtlMs * m, `layer:${idx}:${m}`, jitterRatio),
+  )
 }
 
 export function perKeyTtl(baseTtlMs: number, key: string, jitterRatio: number = DEFAULT_JITTER_RATIO): number {
@@ -55,11 +70,12 @@ export function tieredTtl(
   tier: number,
   totalTiers: number,
   jitterRatio: number = 0.5,
+  seed: string = 'tiered',
 ): number {
-  if (totalTiers <= 1) return jitterTtl(baseTtlMs, jitterRatio)
+  if (totalTiers <= 1) return jitterTtlWithSeed(baseTtlMs, `${seed}:${tier}`, jitterRatio)
   const tierMultiplier = 0.5 + (tier / (totalTiers - 1)) * 1.0
   const tiered = baseTtlMs * tierMultiplier
-  return jitterTtl(tiered, jitterRatio)
+  return jitterTtlWithSeed(tiered, `${seed}:${tier}:${totalTiers}`, jitterRatio)
 }
 
 function stringHash(str: string): number {

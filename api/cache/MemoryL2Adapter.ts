@@ -101,6 +101,30 @@ export class MemoryL2Adapter implements L2CacheAdapter {
     return count
   }
 
+  async deleteByPrefix(prefix: string): Promise<number> {
+    let count = 0
+    const keysToDelete: string[] = []
+    for (const key of this.store.keys()) {
+      if (key.startsWith(prefix)) {
+        keysToDelete.push(key)
+      }
+    }
+    for (const key of keysToDelete) {
+      if (this.store.delete(key)) count++
+    }
+    return count
+  }
+
+  async setManyWithTtl<T>(entries: Array<{ key: string; value: T; ttlMs: number }>): Promise<void> {
+    for (const entry of entries) {
+      await this.set(entry.key, entry.value, entry.ttlMs)
+    }
+  }
+
+  keys(): string[] {
+    return [...this.store.keys()]
+  }
+
   async ping(): Promise<boolean> {
     return true
   }
