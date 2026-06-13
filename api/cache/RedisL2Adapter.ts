@@ -1,11 +1,15 @@
 import type { L2CacheAdapter } from './L2CacheAdapter.js'
+import { jitterTtl } from '../utils/ttlUtils.js'
 
 export interface RedisL2Options {
   url?: string
   keyPrefix?: string
   connectTimeoutMs?: number
   maxRetries?: number
+  ttlJitterRatio?: number
 }
+
+const DEFAULT_JITTER_RATIO = 0.3
 
 export class RedisL2Adapter implements L2CacheAdapter {
   private client: any = null
@@ -15,6 +19,7 @@ export class RedisL2Adapter implements L2CacheAdapter {
   private readonly connectTimeoutMs: number
   private readonly maxRetries: number
   private readonly url: string
+  private readonly jitterRatio: number
   private _hits = 0
   private _misses = 0
   private retries = 0
@@ -24,6 +29,7 @@ export class RedisL2Adapter implements L2CacheAdapter {
     this.keyPrefix = options?.keyPrefix ?? 'qr:cache:'
     this.connectTimeoutMs = options?.connectTimeoutMs ?? 5000
     this.maxRetries = options?.maxRetries ?? 3
+    this.jitterRatio = options?.ttlJitterRatio ?? DEFAULT_JITTER_RATIO
   }
 
   async connect(): Promise<void> {
@@ -132,7 +138,8 @@ export class RedisL2Adapter implements L2CacheAdapter {
   async set<T>(key: string, value: T, ttlMs: number): Promise<void> {
     try {
       await this.ensureConnection()
-      const ttlSec = Math.ceil(ttlMs / 1000)
+      const jitteredTtl = jitterTtl(ttlMs, this.jitterRatio)
+      const ttlSec = Math.max(1, Math.ceil(jitteredTtl / 1000))
       await this.client.set(this.prefixKey(key), JSON.stringify(value), { EX: ttlSec })
     } catch {
       this.connected = false
@@ -193,8 +200,9 @@ export class RedisL2Adapter implements L2CacheAdapter {
     try {
       await this.ensureConnection()
       const pipeline = this.client.multi ? this.client.multi() : this.client.pipeline()
-      const ttlSec = Math.ceil(ttlMs / 1000)
       for (const entry of entries) {
+        const jitteredTtl = jitterTtl(ttlMs, this.jitterRatio)
+        const ttlSec = Math.max(1, Math.ceil(jitteredTtl / 1000))
         pipeline.set(this.prefixKey(entry.key), JSON.stringify(entry.value), { EX: ttlSec })
       }
       await pipeline.exec()

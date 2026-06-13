@@ -1,17 +1,34 @@
 import type { L2CacheAdapter } from './L2CacheAdapter.js'
+import { jitterTtl, jitterTtlWithSeed } from '../utils/ttlUtils.js'
 
 interface StoredEntry {
   value: unknown
   expireAt: number
 }
 
+export interface MemoryL2Options {
+  defaultTtlMs?: number
+  jitterRatio?: number
+  seedTtlByKey?: boolean
+}
+
+const DEFAULT_TTL_MS = 300_000
+const DEFAULT_JITTER_RATIO = 0.3
+
 export class MemoryL2Adapter implements L2CacheAdapter {
   private store = new Map<string, StoredEntry>()
   private cleanupTimer: ReturnType<typeof setInterval> | null = null
   private _hits = 0
   private _misses = 0
+  private readonly defaultTtlMs: number
+  private readonly jitterRatio: number
+  private readonly seedTtlByKey: boolean
 
-  constructor(private readonly defaultTtlMs: number = 300_000) {}
+  constructor(options?: MemoryL2Options) {
+    this.defaultTtlMs = options?.defaultTtlMs ?? DEFAULT_TTL_MS
+    this.jitterRatio = options?.jitterRatio ?? DEFAULT_JITTER_RATIO
+    this.seedTtlByKey = options?.seedTtlByKey ?? false
+  }
 
   startCleanup(intervalMs: number = 30_000): void {
     if (this.cleanupTimer) return
@@ -42,10 +59,13 @@ export class MemoryL2Adapter implements L2CacheAdapter {
   }
 
   async set<T>(key: string, value: T, ttlMs?: number): Promise<void> {
-    const jitter = ttlMs! * 0.1 * (Math.random() * 2 - 1)
+    const baseTtl = ttlMs ?? this.defaultTtlMs
+    const ttl = this.seedTtlByKey
+      ? jitterTtlWithSeed(baseTtl, key, this.jitterRatio)
+      : jitterTtl(baseTtl, this.jitterRatio)
     this.store.set(key, {
       value,
-      expireAt: Date.now() + (ttlMs ?? this.defaultTtlMs) + jitter,
+      expireAt: Date.now() + ttl,
     })
   }
 
@@ -67,7 +87,8 @@ export class MemoryL2Adapter implements L2CacheAdapter {
   }
 
   async setMany<T>(entries: Array<{ key: string; value: T }>, ttlMs: number): Promise<void> {
-    for (const entry of entries) {
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]
       await this.set(entry.key, entry.value, ttlMs)
     }
   }

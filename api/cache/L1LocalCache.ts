@@ -1,3 +1,5 @@
+import { jitterTtl, jitterTtlWithSeed } from '../utils/ttlUtils.js'
+
 interface CacheEntry<T> {
   value: T
   expireAt: number
@@ -14,11 +16,12 @@ export interface L1CacheOptions {
   maxSize?: number
   defaultTtlMs?: number
   ttlJitterRatio?: number
+  seedTtlByKey?: boolean
 }
 
 const DEFAULT_MAX_SIZE = 500
 const DEFAULT_TTL_MS = 30_000
-const DEFAULT_JITTER_RATIO = 0.1
+const DEFAULT_JITTER_RATIO = 0.3
 
 export class L1LocalCache {
   private map = new Map<string, LRUNode<unknown>>()
@@ -27,6 +30,7 @@ export class L1LocalCache {
   private readonly maxSize: number
   private readonly defaultTtlMs: number
   private readonly jitterRatio: number
+  private readonly seedTtlByKey: boolean
   private cleanupTimer: ReturnType<typeof setInterval> | null = null
   private _hits = 0
   private _misses = 0
@@ -35,6 +39,7 @@ export class L1LocalCache {
     this.maxSize = options?.maxSize ?? DEFAULT_MAX_SIZE
     this.defaultTtlMs = options?.defaultTtlMs ?? DEFAULT_TTL_MS
     this.jitterRatio = options?.ttlJitterRatio ?? DEFAULT_JITTER_RATIO
+    this.seedTtlByKey = options?.seedTtlByKey ?? false
   }
 
   startCleanup(intervalMs: number = 10_000): void {
@@ -68,9 +73,11 @@ export class L1LocalCache {
   }
 
   set<T>(key: string, value: T, ttlMs?: number): void {
-    const ttl = ttlMs ?? this.defaultTtlMs
-    const jitter = ttl * this.jitterRatio * (Math.random() * 2 - 1)
-    const expireAt = Date.now() + ttl + jitter
+    const baseTtl = ttlMs ?? this.defaultTtlMs
+    const ttl = this.seedTtlByKey
+      ? jitterTtlWithSeed(baseTtl, key, this.jitterRatio)
+      : jitterTtl(baseTtl, this.jitterRatio)
+    const expireAt = Date.now() + ttl
 
     const existing = this.map.get(key)
     if (existing) {

@@ -1,5 +1,6 @@
 import { CacheManager, type CacheManagerOptions } from './CacheManager.js'
 import { CacheMonitor } from './CacheMonitor.js'
+import { QR_CACHE_KEYS } from '../utils/CacheKeyBuilder.js'
 import type { QrCode } from '../../shared/types.js'
 
 export interface QrCodeCacheOptions extends CacheManagerOptions {
@@ -9,11 +10,6 @@ export interface QrCodeCacheOptions extends CacheManagerOptions {
 
 const DEFAULT_WARM_UP_TOP_N = 50
 const DEFAULT_STALE_WHILE_REVALIDATE_MS = 60_000
-
-const KEY_PREFIX_BY_ID = 'id:'
-const KEY_PREFIX_BY_SHORT = 'short:'
-const KEY_PREFIX_LIST = 'list:'
-const KEY_PREFIX_ALL = 'all'
 
 export class QrCodeCache {
   readonly manager: CacheManager
@@ -27,6 +23,8 @@ export class QrCodeCache {
     this.staleWhileRevalidateMs = options?.staleWhileRevalidateMs ?? DEFAULT_STALE_WHILE_REVALIDATE_MS
     this.manager = new CacheManager({
       namespace: 'qr',
+      seedTtlByKey: true,
+      bloomFilter: options?.bloomFilter ?? true,
       ...options,
     })
     this.monitor = new CacheMonitor(this.manager)
@@ -45,26 +43,40 @@ export class QrCodeCache {
       const sorted = [...allQrCodes].sort((a, b) => b.scanCount - a.scanCount)
       const topN = sorted.slice(0, this.warmUpTopN)
 
-      const entries: Array<{ key: string; value: QrCode }> = []
-      for (const qr of topN) {
-        entries.push({ key: `${KEY_PREFIX_BY_ID}${qr.id}`, value: qr })
-        entries.push({ key: `${KEY_PREFIX_BY_SHORT}${qr.shortCode}`, value: qr })
+      const warmUpEntries: Array<{ key: string; value: QrCode }> = []
+      const bloomFilterKeys: string[] = []
+
+      for (const qr of allQrCodes) {
+        const idKey = QR_CACHE_KEYS.byId(qr.id)
+        const shortKey = QR_CACHE_KEYS.byShortCode(qr.shortCode)
+        bloomFilterKeys.push(idKey, shortKey)
       }
 
-      if (entries.length > 0) {
-        await this.manager.warmUp(entries)
+      this.manager.populateBloomFilter(bloomFilterKeys)
+
+      for (const qr of topN) {
+        warmUpEntries.push({ key: QR_CACHE_KEYS.byId(qr.id), value: qr })
+        warmUpEntries.push({ key: QR_CACHE_KEYS.byShortCode(qr.shortCode), value: qr })
+      }
+
+      if (warmUpEntries.length > 0) {
+        await this.manager.warmUp(warmUpEntries)
       }
 
       if (allQrCodes.length > 0) {
-        await this.manager.set(KEY_PREFIX_ALL, allQrCodes, {
-          l1: this.manager['l1TtlMs'] * 2,
-          l2: this.manager['l2TtlMs'] * 2,
+        await this.manager.set(QR_CACHE_KEYS.all(), allQrCodes, {
+          l1: 60_000,
+          l2: 600_000,
         })
       }
 
       this.warmedUp = true
       this.monitor.start()
-      console.info(`[QrCodeCache] Warmed up with ${entries.length / 2} QR codes (${allQrCodes.length} total)`)
+      console.info(
+        `[QrCodeCache] Warmed up with ${topN.length} QR codes, ` +
+        `${bloomFilterKeys.length} keys added to bloom filter, ` +
+        `${allQrCodes.length} total`,
+      )
     } catch (err) {
       console.error('[QrCodeCache] Warm-up failed:', err)
       this.monitor.start()
@@ -72,56 +84,79 @@ export class QrCodeCache {
   }
 
   async getById(id: string, fallback: () => Promise<QrCode | undefined>): Promise<QrCode | undefined> {
-    return this.manager.get<QrCode>(`${KEY_PREFIX_BY_ID}${id}`, fallback)
+    const key = QR_CACHE_KEYS.byId(id)
+    const result = await this.manager.get<QrCode>(key, fallback)
+    if (result) {
+      this.manager.addToBloomFilter(QR_CACHE_KEYS.byShortCode(result.shortCode))
+    }
+    return result
   }
 
   async getByShortCode(shortCode: string, fallback: () => Promise<QrCode | undefined>): Promise<QrCode | undefined> {
-    return this.manager.get<QrCode>(`${KEY_PREFIX_BY_SHORT}${shortCode}`, fallback)
+    const key = QR_CACHE_KEYS.byShortCode(shortCode)
+    const result = await this.manager.get<QrCode>(key, fallback)
+    if (result) {
+      this.manager.addToBloomFilter(QR_CACHE_KEYS.byId(result.id))
+    }
+    return result
   }
 
   async getAll(fallback: () => Promise<QrCode[]>): Promise<QrCode[]> {
-    return this.manager.get<QrCode[]>(KEY_PREFIX_ALL, fallback) ?? []
+    return this.manager.get<QrCode[]>(QR_CACHE_KEYS.all(), fallback) ?? []
   }
 
   async getList(
-    cacheKey: string,
+    page: number,
+    pageSize: number,
+    keyword: string | undefined,
     fallback: () => Promise<QrCode[]>,
   ): Promise<QrCode[]> {
-    return this.manager.get<QrCode[]>(`${KEY_PREFIX_LIST}${cacheKey}`, fallback) ?? []
+    const key = QR_CACHE_KEYS.list(page, pageSize, keyword)
+    return this.manager.get<QrCode[]>(key, fallback) ?? []
   }
 
   async onCreated(qr: QrCode): Promise<void> {
+    const idKey = QR_CACHE_KEYS.byId(qr.id)
+    const shortKey = QR_CACHE_KEYS.byShortCode(qr.shortCode)
+
+    this.manager.addToBloomFilter(idKey)
+    this.manager.addToBloomFilter(shortKey)
+
     await Promise.all([
-      this.manager.invalidate(KEY_PREFIX_ALL),
-      this.manager.invalidate(`${KEY_PREFIX_BY_ID}${qr.id}`),
-      this.manager.invalidate(`${KEY_PREFIX_BY_SHORT}${qr.shortCode}`),
+      this.manager.invalidate(QR_CACHE_KEYS.all()),
+      this.manager.invalidate(idKey),
+      this.manager.invalidate(shortKey),
     ])
   }
 
   async onUpdated(qr: QrCode): Promise<void> {
-    const keys = [
-      `${KEY_PREFIX_BY_ID}${qr.id}`,
-      `${KEY_PREFIX_BY_SHORT}${qr.shortCode}`,
-    ]
+    const idKey = QR_CACHE_KEYS.byId(qr.id)
+    const shortKey = QR_CACHE_KEYS.byShortCode(qr.shortCode)
+
+    this.manager.addToBloomFilter(idKey)
+    this.manager.addToBloomFilter(shortKey)
+
     await this.manager.warmUp([
-      { key: `${KEY_PREFIX_BY_ID}${qr.id}`, value: qr },
-      { key: `${KEY_PREFIX_BY_SHORT}${qr.shortCode}`, value: qr },
+      { key: idKey, value: qr },
+      { key: shortKey, value: qr },
     ])
-    await this.manager.invalidateByPrefix(KEY_PREFIX_LIST)
-    await this.manager.invalidate(KEY_PREFIX_ALL)
+
+    await this.manager.invalidateByPrefix('qr:list:')
+    await this.manager.invalidate(QR_CACHE_KEYS.all())
   }
 
   async onDeleted(id: string, shortCode: string): Promise<void> {
     await this.manager.invalidateMany([
-      `${KEY_PREFIX_BY_ID}${id}`,
-      `${KEY_PREFIX_BY_SHORT}${shortCode}`,
-      KEY_PREFIX_ALL,
+      QR_CACHE_KEYS.byId(id),
+      QR_CACHE_KEYS.byShortCode(shortCode),
+      QR_CACHE_KEYS.all(),
     ])
-    await this.manager.invalidateByPrefix(KEY_PREFIX_LIST)
+    await this.manager.invalidateByPrefix('qr:list:')
   }
 
-  async onScanCountUpdated(id: string): Promise<void> {
-    await this.manager.invalidate(`${KEY_PREFIX_BY_ID}${id}`)
+  async onScanCountUpdated(id: string, shortCode: string): Promise<void> {
+    await this.manager.invalidate(QR_CACHE_KEYS.byId(id))
+    await this.manager.invalidate(QR_CACHE_KEYS.byShortCode(shortCode))
   }
 
   async onEnabledChanged(id: string, qr: QrCode): Promise<void> {

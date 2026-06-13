@@ -25,32 +25,34 @@ export const QrService = {
   ): Promise<PagedResult<QrCode>> {
     const cache = getQrCodeCache()
 
-    if (!keyword) {
-      const cacheKey = `page:${page}:size:${pageSize}`
-      const cached = await cache.getList(cacheKey, async () => {
-        const items = await qrCodeRepository.getAll()
-        const total = items.length
-        const start = (page - 1) * pageSize
-        const paged = items.slice(start, start + pageSize)
-        return paged
-      })
-      const allItems = await cache.getAll(() => qrCodeRepository.getAll())
-      const total = allItems.length
-      return { items: cached, total, page, pageSize }
+    const cachedItems = await cache.getList(page, pageSize, keyword, async () => {
+      let items = await qrCodeRepository.getAll()
+      if (keyword) {
+        const kw = keyword.toLowerCase()
+        items = items.filter(
+          (q) =>
+            q.name.toLowerCase().includes(kw) ||
+            q.targetUrl.toLowerCase().includes(kw) ||
+            q.shortCode.toLowerCase().includes(kw),
+        )
+      }
+      const start = (page - 1) * pageSize
+      return items.slice(start, start + pageSize)
+    })
+
+    const allItems = await cache.getAll(() => qrCodeRepository.getAll())
+    let total = allItems.length
+    if (keyword) {
+      const kw = keyword.toLowerCase()
+      total = allItems.filter(
+        (q) =>
+          q.name.toLowerCase().includes(kw) ||
+          q.targetUrl.toLowerCase().includes(kw) ||
+          q.shortCode.toLowerCase().includes(kw),
+      ).length
     }
 
-    let items = await qrCodeRepository.getAll()
-    const kw = keyword.toLowerCase()
-    items = items.filter(
-      (q) =>
-        q.name.toLowerCase().includes(kw) ||
-        q.targetUrl.toLowerCase().includes(kw) ||
-        q.shortCode.toLowerCase().includes(kw),
-    )
-    const total = items.length
-    const start = (page - 1) * pageSize
-    const paged = items.slice(start, start + pageSize)
-    return { items: paged, total, page, pageSize }
+    return { items: cachedItems, total, page, pageSize }
   },
 
   async getById(id: string): Promise<QrCode | undefined> {
@@ -171,7 +173,7 @@ export const QrService = {
     const qr = await qrCodeRepository.getById(id)
     if (qr) {
       await qrCodeRepository.update(id, { scanCount: qr.scanCount + 1 })
-      await getQrCodeCache().onScanCountUpdated(id)
+      await getQrCodeCache().onScanCountUpdated(id, qr.shortCode)
     }
   },
 }
